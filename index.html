@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Satellite Skyview Checker</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#ffffff"/>
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SatFinder">
+    <meta name="description" content="Get the optimal deployment from your location.">
+    
+    <!-- PWA Manifest Link -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Apple Touch Icon -->
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- LeafletJS for mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    
+    <!-- Geomag JS for Magnetic Declination Calculation -->
+    <script src="https://cdn.jsdelivr.net/npm/geomag/dist/geomag.min.js"></script>
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        #map { height: 450px; }
+        .spinner { border-top-color: #3498db; animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .distance-label { background: rgba(255, 255, 255, 0.8); border: 1px solid #ccc; border-radius: 4px; padding: 2px 5px; font-size: 10px; font-weight: bold; white-space: nowrap; }
+        .unit-toggle-btn.active { background-color: #2563eb; color: white; }
+        .unit-toggle-btn { transition: background-color 0.2s, color 0.2s; }
+        /* Hide the Leaflet flag icon */
+        .leaflet-attribution-flag {
+            display: none !important;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 md:p-8 max-w-5xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Satellite Skyview Checker</h1>
+            <p class="text-gray-600 mt-2">Get the optimal deployment from your location.</p>
+        </header>
+
+        <main class="grid grid-cols-1 md:grid-cols-12 gap-8">
+            <div class="md:col-span-4 bg-white p-6 rounded-xl shadow-md">
+                <h2 class="text-xl font-semibold mb-4 border-b pb-2">1. Set Your Location</h2>
+                <div class="mb-6">
+                    <button id="getLocationBtn" class="w-full bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700 transition duration-300 flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd" /></svg>
+                        Use My Current Location
+                    </button>
+                </div>
+                <div class="relative my-4"><div class="absolute inset-0 flex items-center"><div class="w-full border-t border-gray-300"></div></div><div class="relative flex justify-center"><span class="bg-white px-2 text-sm text-gray-500">OR</span></div></div>
+                <div>
+                    <label for="locationInput" class="block text-sm font-medium text-gray-700 mb-1">Enter Address or Coordinates:</label>
+                    <input type="text" id="locationInput" class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <button id="searchBtn" class="w-full mt-2 bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg hover:bg-gray-800 transition duration-300">Search</button>
+                </div>
+                <div id="status" class="mt-4 text-sm text-center font-medium"></div>
+                <div id="loader" class="hidden w-6 h-6 border-4 border-gray-200 rounded-full spinner mx-auto mt-4"></div>
+                
+                <!-- Diagram -->
+                <div class="mt-8 pt-4 border-t">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-2">Clearance Diagram</h3>
+                    <svg viewBox="0 0 200 100" class="w-full">
+                        <!-- Ground line -->
+                        <line x1="10" y1="90" x2="190" y2="90" stroke="black" stroke-width="1"/>
+                        <!-- Antenna -->
+                        <rect x="25" y="70" width="10" height="20" fill="gray"/>
+                        <line x1="30" y1="70" x2="30" y2="50" stroke="gray" stroke-width="1"/>
+                        <!-- Obstacle -->
+                        <rect x="120" y="60" width="20" height="30" fill="#cbd5e1"/>
+                        <text x="130" y="55" font-size="8" text-anchor="middle">Obstacle</text>
+                        <!-- Line of sight -->
+                        <line x1="30" y1="70" x2="180" y2="20" stroke="red" stroke-width="1" stroke-dasharray="2,2"/>
+                        <!-- Elevation Arc -->
+                        <path d="M 50 90 A 20 20 0 0 1 44 72" fill="none" stroke="blue" stroke-width="1"/>
+                        <text x="55" y="80" font-size="8" fill="blue">Elevation</text>
+                        <!-- Distance -->
+                        <line x1="30" y1="95" x2="130" y2="95" stroke="green" stroke-width="1"/>
+                        <line x1="30" y1="92" x2="30" y2="98" stroke="green" stroke-width="1"/>
+                        <line x1="130" y1="92" x2="130" y2="98" stroke="green" stroke-width="1"/>
+                        <text x="80" y="100" font-size="8" fill="green" text-anchor="middle">Distance</text>
+                        <!-- Height -->
+                        <line x1="135" y1="90" x2="135" y2="60" stroke="purple" stroke-width="1" stroke-dasharray="2,2"/>
+                        <text x="140" y="75" font-size="8" fill="purple">Height</text>
+                    </svg>
+                </div>
+            </div>
+
+            <div class="md:col-span-8 bg-white p-6 rounded-xl shadow-md">
+                <div id="results-placeholder" class="text-center text-gray-500 flex items-center justify-center h-full">
+                    <p>Set your location to see results and map.</p>
+                </div>
+                <div id="results-container" class="hidden">
+                     <h2 class="text-xl font-semibold mb-4 border-b pb-2">2. Optimal Satellite Pointing</h2>
+                    <div id="results" class="mb-4 bg-green-100 border-l-4 border-green-500 text-green-800 p-4 rounded-lg">
+                        <p class="font-bold text-lg">Serving Satellite: <span id="bestSatName"></span></p>
+                        <p><strong>Elevation:</strong> <span id="elevation"></span>°</p>
+                        <p><strong>Direction (True North 🗺️):</strong> <span id="azimuth"></span></p>
+                        <p id="magAzimuthRow"><strong>Direction (Magnetic North 🧭):</strong> <span id="magAzimuth"></span></p>
+                    </div>
+                    
+                    <div id="obstacle-container" class="mt-6">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-lg font-semibold text-gray-800">Obstacle Clearance Guide</h3>
+                            <div class="flex rounded-lg border border-gray-300 p-0.5">
+                                <button id="metricBtn" class="unit-toggle-btn active px-3 py-1 text-sm font-semibold rounded-md">Meter</button>
+                                <button id="imperialBtn" class="unit-toggle-btn px-3 py-1 text-sm font-semibold rounded-md">Feet</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto rounded-lg border border-gray-200">
+                            <table class="min-w-full bg-white">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th id="distanceHeader" class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Distance from You</th>
+                                        <th id="clearanceHeader" class="py-3 px-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Required Height Clearance</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="obstacleTableBody" class="divide-y divide-gray-200">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div id="map-container" class="mt-6 rounded-lg overflow-hidden border border-gray-200">
+                        <div id="map"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then(reg => console.log('SW registered!', reg)).catch(err => console.log('SW registration failed: ', err));
+            });
+        }
+        const satellites = [{ name: 'APAC', lat: 0.012, lon: 143.505, alt: 35786.433 },{ name: 'AMER', lat: -0.005, lon: -97.994, alt: 35786.451 },{ name: 'EMEA', lat: -0.002, lon: 24.868, alt: 35786.605 }];
+        const getLocationBtn = document.getElementById('getLocationBtn'),locationInput = document.getElementById('locationInput'),searchBtn = document.getElementById('searchBtn'),statusDiv = document.getElementById('status'),loader = document.getElementById('loader'),resultsPlaceholder = document.getElementById('results-placeholder'),resultsContainer = document.getElementById('results-container'),bestSatName = document.getElementById('bestSatName'),elevationSpan = document.getElementById('elevation'),azimuthSpan = document.getElementById('azimuth'),magAzimuthSpan = document.getElementById('magAzimuth'),magAzimuthRow = document.getElementById('magAzimuthRow'),obstacleTableBody = document.getElementById('obstacleTableBody'),metricBtn = document.getElementById('metricBtn'),imperialBtn = document.getElementById('imperialBtn'),distanceHeader = document.getElementById('distanceHeader'),clearanceHeader = document.getElementById('clearanceHeader'),obstacleContainer = document.getElementById('obstacle-container'),mapContainer = document.getElementById('map-container');
+        let currentUnit = 'metric',lastLocation = null,map = null,userMarker = null,satelliteLine = null,satelliteMarkers = L.layerGroup(),distanceMarkers = L.layerGroup();
+        const METERS_TO_FEET = 3.28084;
+        getLocationBtn.addEventListener('click', getUserLocation);
+        searchBtn.addEventListener('click', handleSearch);
+        locationInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSearch(); });
+        metricBtn.addEventListener('click', () => setUnit('metric', true));
+        imperialBtn.addEventListener('click', () => setUnit('feet', true));
+        window.addEventListener('online', () => updateOnlineStatus(true));
+        window.addEventListener('offline', () => updateOnlineStatus(false));
+        document.addEventListener('DOMContentLoaded', () => { initMap(); updateOnlineStatus(navigator.onLine); });
+        function updateOnlineStatus(isOnline) {
+            if (isOnline) {
+                locationInput.placeholder = "Adelaide or -34.9285, 138.6007";
+                if (resultsContainer.classList.contains('hidden') === false) {
+                    obstacleContainer.classList.remove('hidden');
+                    mapContainer.classList.remove('hidden');
+                }
+            } else {
+                locationInput.placeholder = "Offline: Enter coordinates only";
+                mapContainer.classList.add('hidden');
+                if (resultsContainer.classList.contains('hidden') === false) {
+                    obstacleContainer.classList.remove('hidden');
+                }
+                showStatus("App is offline. Address search is disabled.", true);
+            }
+        }
+        function initMap() {
+            if (map) return;
+            const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
+            const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles &copy; Esri' });
+            const baseMaps = { "Street": streetLayer, "Satellite": satelliteLayer };
+            map = L.map('map', { layers: [streetLayer], attributionControl: false }).setView([20, 0], 2);
+            L.control.attribution({ prefix: '<a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>' }).addTo(map);
+            L.control.layers(baseMaps).addTo(map);
+            satelliteMarkers.addTo(map);
+            distanceMarkers.addTo(map);
+        }
+        function setLoading(isLoading) { loader.classList.toggle('hidden', !isLoading);[getLocationBtn, locationInput, searchBtn].forEach(el => el.disabled = isLoading); }
+        function showStatus(message, isError = false) { statusDiv.textContent = message; statusDiv.className = `mt-4 text-sm text-center font-medium ${isError ? 'text-red-600' : 'text-green-600'}`; }
+        function setUnit(unit, isManual) { currentUnit = unit; metricBtn.classList.toggle('active', unit === 'metric'); imperialBtn.classList.toggle('active', unit === 'feet'); if (isManual && lastLocation) { processLocation(lastLocation.lat, lastLocation.lon, lastLocation.statusMessage, true); } }
+        async function getUserLocation() {
+            if (!navigator.geolocation) {
+                showStatus("Geolocation is not supported by your browser.", true);
+                return;
+            }
+            setLoading(true);
+            showStatus("Requesting location...");
+            navigator.geolocation.getCurrentPosition( async (position) => {
+                const { latitude, longitude } = position.coords;
+                if (navigator.onLine) {
+                    await checkCountryAndSetUnit(latitude, longitude);
+                } else {
+                    setUnit(currentUnit, false);
+                }
+                processLocation(latitude, longitude, `Current Location: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+            }, (error) => {
+                let msg = "Unable to retrieve your location. ";
+                if(error.code === 1) msg += "Please grant permission.";
+                else if (!navigator.onLine) msg = "Could not get location while offline. Try again in an open area.";
+                else msg += "Please try another method.";
+                showStatus(msg, true);
+                setLoading(false);
+            });
+        }
+        function handleSearch() { const query = locationInput.value.trim(); if (!query) { showStatus("Please enter an address or coordinates.", true); return; } const coordRegex = /^-?\d+(\.\d+)?,\s*-?\d+(\.\d+)?$/; if (coordRegex.test(query)) { processManualCoords(query); } else { if (!navigator.onLine) { showStatus("Address search is disabled while offline.", true); return; } searchAddress(query); } }
+        async function searchAddress(address) { setLoading(true); showStatus("Searching for address..."); const controller = new AbortController(); const timeoutId = setTimeout(() => controller.abort(), 10000); const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&addressdetails=1`; try { const response = await fetch(url, { signal: controller.signal }); clearTimeout(timeoutId); if (!response.ok) throw new Error(`Network response was not ok`); const data = await response.json(); if (data && data.length > 0) { const { lat, lon, display_name, address } = data[0]; if (address && address.country_code === 'us') { setUnit('feet', false); } else { setUnit('metric', false); } processLocation(parseFloat(lat), parseFloat(lon), `Address: ${display_name}`); } else { showStatus("Address not found. Please try a different one.", true); setLoading(false); } } catch (error) { clearTimeout(timeoutId); if (error.name === 'AbortError') showStatus("Address service timed out.", true); else showStatus("Could not connect to the address service.", true); setLoading(false); } }
+        async function processManualCoords(query) { const parts = query.split(',').map(s => s.trim()); const lat = parseFloat(parts[0]); const lon = parseFloat(parts[1]); if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) { showStatus("Invalid coordinates entered. Please use 'latitude, longitude' format.", true); return; } setLoading(true); if (navigator.onLine) { await checkCountryAndSetUnit(lat, lon); } processLocation(lat, lon, `Coordinates: ${lat.toFixed(4)}, ${lon.toFixed(4)}`); }
+        async function checkCountryAndSetUnit(lat, lon) { try { const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`; const response = await fetch(url); const data = await response.json(); if (data.address && data.address.country_code === 'us') { setUnit('feet', false); } else { setUnit('metric', false); } } catch (error) { console.error("Reverse geocoding failed, defaulting to metric.", error); setUnit('metric', false); } }
+        function processLocation(lat, lon, statusMessage, isUnitChange = false) { if (!isUnitChange) { setLoading(true); showStatus(statusMessage, false); } lastLocation = { lat, lon, statusMessage }; let bestSat = null; let maxElevation = -90; satellites.forEach(sat => { const result = calculateAzimuthElevation(lat, lon, sat.lat, sat.lon, sat.alt); if (result.elevation > maxElevation) { maxElevation = result.elevation; bestSat = { ...sat, ...result }; } }); if (bestSat) { lastLocation.bestSat = bestSat; updateResults(bestSat); updateMap(lat, lon, bestSat); } else { showStatus("Could not calculate satellite data.", true); } if (!isUnitChange) { setLoading(false); } }
+        function updateResults(sat) {
+            resultsPlaceholder.classList.add('hidden');
+            resultsContainer.classList.remove('hidden');
+            bestSatName.textContent = sat.name;
+            elevationSpan.textContent = sat.elevation.toFixed(0);
+            const trueAzimuth = sat.azimuth;
+            azimuthSpan.textContent = `${trueAzimuth.toFixed(0)}° ${degreesToCompass(trueAzimuth)}`;
+            
+            if (typeof geomag !== 'undefined') {
+                const field = geomag.field(lastLocation.lat, lastLocation.lon);
+                const declination = field.declination;
+                const magneticAzimuth = (trueAzimuth - declination + 360) % 360;
+                magAzimuthSpan.textContent = `${magneticAzimuth.toFixed(0)}° ${degreesToCompass(magneticAzimuth)}`;
+                magAzimuthRow.classList.remove('hidden');
+            } else {
+                magAzimuthRow.classList.add('hidden');
+            }
+
+            obstacleTableBody.innerHTML = '';
+            const elevationRad = toRadians(sat.elevation);
+            const isImperial = currentUnit === 'feet';
+            const distances = isImperial ? [30, 150, 300] : [10, 50, 100];
+            const unitLabel = isImperial ? 'ft' : 'm';
+            distanceHeader.textContent = `Distance from You (${unitLabel})`;
+            clearanceHeader.textContent = `Required Height Clearance (${unitLabel})`;
+            distances.forEach(distance => {
+                const distanceInMeters = isImperial ? distance / METERS_TO_FEET : distance;
+                let requiredHeight = distanceInMeters * Math.tan(elevationRad);
+                if (isImperial) {
+                    requiredHeight *= METERS_TO_FEET;
+                }
+                const row = document.createElement('tr');
+                row.className = "text-sm text-gray-700";
+                row.innerHTML = `<td class="py-3 px-4">${distance}${unitLabel}</td><td class="py-3 px-4">${requiredHeight.toFixed(0)}${unitLabel}</td>`;
+                obstacleTableBody.appendChild(row);
+            });
+        }
+        function updateMap(userLat, userLon, sat) {
+            initMap();
+            const userPos = [userLat, userLon];
+            const satPos = [sat.lat, sat.lon];
+            satelliteMarkers.clearLayers();
+            distanceMarkers.clearLayers();
+            if (userMarker) {
+                userMarker.setLatLng(userPos).setPopupContent(`${userLat.toFixed(4)}, ${userLon.toFixed(4)}`);
+            } else {
+                userMarker = L.marker(userPos).addTo(map).bindPopup(`${userLat.toFixed(4)}, ${userLon.toFixed(4)}`).openPopup();
+            }
+            if (satelliteLine) {
+                satelliteLine.setLatLngs([userPos, satPos]);
+            } else {
+                satelliteLine = L.polyline([userPos, satPos], { color: 'red', weight: 3, dashArray: '5, 10' }).addTo(map);
+            }
+            const satMarker = L.marker(satPos).bindPopup(`Ground point for ${sat.name}`);
+            satelliteMarkers.addLayer(satMarker);
+            const elevationRad = toRadians(sat.elevation);
+            const rhumbBearing = calculateRhumbBearing(userLat, userLon, sat.lat, sat.lon);
+            const isImperial = currentUnit === 'feet';
+            const distances = isImperial ? [30, 150, 300] : [10, 50, 100];
+            const unitLabel = isImperial ? 'ft' : 'm';
+            distances.forEach(distance => {
+                const distanceInMeters = isImperial ? distance / METERS_TO_FEET : distance;
+                const destPoint = calculateRhumbDestinationPoint(userLat, userLon, rhumbBearing, distanceInMeters);
+                let annotationValue = distanceInMeters * Math.tan(elevationRad);
+                if (isImperial) {
+                    annotationValue *= METERS_TO_FEET;
+                }
+                const dot = L.circleMarker([destPoint.lat, destPoint.lon], { radius: 4, color: '#00008B', fillColor: '#00008B', fillOpacity: 1 }).addTo(distanceMarkers);
+                dot.bindTooltip(`${annotationValue.toFixed(0)}${unitLabel}`, { permanent: true, direction: 'top', offset: [0, -5], className: 'distance-label' });
+            });
+            map.setView(userPos, 18);
+            setTimeout(() => map.invalidateSize(), 100);
+        }
+        function toRadians(deg) { return deg * Math.PI / 180; }
+        function toDegrees(rad) { return rad * 180 / Math.PI; }
+        function degreesToCompass(num) {
+            const val = Math.floor((num / 22.5) + 0.5);
+            const arr = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+            return arr[(val % 16)];
+        }
+        function calculateRhumbBearing(lat1, lon1, lat2, lon2) { const phi1 = toRadians(lat1), phi2 = toRadians(lat2); let deltaLambda = toRadians(lon2 - lon1); const deltaPsi = Math.log(Math.tan(Math.PI / 4 + phi2 / 2) / Math.tan(Math.PI / 4 + phi1 / 2)); if (Math.abs(deltaLambda) > Math.PI) deltaLambda = deltaLambda > 0 ? -(2 * Math.PI - deltaLambda) : (2 * Math.PI + deltaLambda); const bearing = toDegrees(Math.atan2(deltaLambda, deltaPsi)); return (bearing + 360) % 360; }
+        function calculateRhumbDestinationPoint(lat, lon, bearing, distance) { const R = 6371e3; const phi1 = toRadians(lat), lambda1 = toRadians(lon); const theta = toRadians(bearing), delta = distance / R; const phi2 = phi1 + delta * Math.cos(theta); const deltaPsi = Math.log(Math.tan(phi2 / 2 + Math.PI / 4) / Math.tan(phi1 / 2 + Math.PI / 4)); const q = Math.abs(deltaPsi) > 10e-12 ? (phi2 - phi1) / deltaPsi : Math.cos(phi1); const deltaLambda = delta * Math.sin(theta) / q; const lambda2 = lambda1 + deltaLambda; const lon2 = (toDegrees(lambda2) + 540) % 360 - 180; return { lat: toDegrees(phi2), lon: lon2 }; }
+        function calculateAzimuthElevation(obsLatDeg, obsLonDeg, satLatDeg, satLonDeg, satAltKm) { const a = 6378.137, f = 1 / 298.257223563, e2 = 2 * f - f * f; const obsLatRad = toRadians(obsLatDeg), obsLonRad = toRadians(obsLonDeg); const N_obs = a / Math.sqrt(1 - e2 * Math.sin(obsLatRad) ** 2); const obsX = (N_obs) * Math.cos(obsLatRad) * Math.cos(obsLonRad); const obsY = (N_obs) * Math.cos(obsLatRad) * Math.sin(obsLonRad); const obsZ = ((1 - e2) * N_obs) * Math.sin(obsLatRad); const satLatRad = toRadians(satLatDeg), satLonRad = toRadians(satLonDeg); const N_sat = a / Math.sqrt(1 - e2 * Math.sin(satLatRad) ** 2); const satX = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.cos(satLonRad); const satY = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.sin(satLonRad); const satZ = ((1 - e2) * N_sat + satAltKm) * Math.sin(satLatRad); const dX = satX - obsX, dY = satY - obsY, dZ = satZ - obsZ; const sLat = Math.sin(obsLatRad), cLat = Math.cos(obsLatRad); const sLon = Math.sin(obsLonRad), cLon = Math.cos(obsLonRad); const E = -sLon * dX + cLon * dY; const N = -sLat * cLon * dX - sLat * sLon * dY + cLat * dZ; const U = cLat * cLon * dX + cLat * sLon * dY + sLat * dZ; const elevationRad = Math.atan2(U, Math.sqrt(E * E + N * N)); let azimuthRad = Math.atan2(E, N); let azimuthDeg = toDegrees(azimuthRad); if (azimuthDeg < 0) azimuthDeg += 360; return { azimuth: azimuthDeg, elevation: toDegrees(elevationRad) }; }
+    </script>
+
+</body>
+</html>
+
