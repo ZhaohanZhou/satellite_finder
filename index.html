@@ -271,13 +271,26 @@
             } else {
                 userMarker = L.marker(userPos).addTo(map).bindPopup(`${userLat.toFixed(4)}, ${userLon.toFixed(4)}`).openPopup();
             }
-            if (satelliteLine) {
-                satelliteLine.setLatLngs([userPos, satPos]);
-            } else {
-                satelliteLine = L.polyline([userPos, satPos], { color: 'red', weight: 3, dashArray: '5, 10' }).addTo(map);
+
+            // --- ANTImERIDIAN BUG FIX ---
+            // Handle drawing the line across the 180° meridian
+            const lonDiff = sat.lon - userLon;
+            let satPosWrapped = [sat.lat, sat.lon];
+            if (lonDiff > 180) {
+                satPosWrapped = [sat.lat, sat.lon - 360];
+            } else if (lonDiff < -180) {
+                satPosWrapped = [sat.lat, sat.lon + 360];
             }
+            if (satelliteLine) {
+                satelliteLine.setLatLngs([userPos, satPosWrapped]);
+            } else {
+                satelliteLine = L.polyline([userPos, satPosWrapped], { color: 'red', weight: 3, dashArray: '5, 10' }).addTo(map);
+            }
+            // --- END BUG FIX ---
+            
             const satMarker = L.marker(satPos).bindPopup(`Ground point for ${sat.name}`);
             satelliteMarkers.addLayer(satMarker);
+
             const elevationRad = toRadians(sat.elevation);
             const rhumbBearing = calculateRhumbBearing(userLat, userLon, sat.lat, sat.lon);
             const isImperial = currentUnit === 'feet';
@@ -303,11 +316,10 @@
             const arr = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
             return arr[(val % 16)];
         }
-        function calculateRhumbBearing(lat1, lon1, lat2, lon2) { const phi1 = toRadians(lat1), phi2 = toRadians(lat2); let deltaLambda = toRadians(lon2 - lon1); const deltaPsi = Math.log(Math.tan(Math.PI / 4 + phi2 / 2) / Math.tan(Math.PI / 4 + phi1 / 2)); if (Math.abs(deltaLambda) > Math.PI) deltaLambda = deltaLambda > 0 ? -(2 * Math.PI - deltaLambda) : (2 * Math.PI + deltaLambda); const bearing = toDegrees(Math.atan2(deltaLambda, deltaPsi)); return (bearing + 360) % 360; }
+        function calculateRhumbBearing(lat1, lon1, lat2, lon2) { const phi1 = toRadians(lat1), phi2 = toRadians(lat2); let deltaLambda = toRadians(lon2 - lon1); if (Math.abs(deltaLambda) > Math.PI) deltaLambda = deltaLambda > 0 ? -(2 * Math.PI - deltaLambda) : (2 * Math.PI + deltaLambda); const deltaPsi = Math.log(Math.tan(Math.PI / 4 + phi2 / 2) / Math.tan(Math.PI / 4 + phi1 / 2)); const bearing = toDegrees(Math.atan2(deltaLambda, deltaPsi)); return (bearing + 360) % 360; }
         function calculateRhumbDestinationPoint(lat, lon, bearing, distance) { const R = 6371e3; const phi1 = toRadians(lat), lambda1 = toRadians(lon); const theta = toRadians(bearing), delta = distance / R; const phi2 = phi1 + delta * Math.cos(theta); const deltaPsi = Math.log(Math.tan(phi2 / 2 + Math.PI / 4) / Math.tan(phi1 / 2 + Math.PI / 4)); const q = Math.abs(deltaPsi) > 10e-12 ? (phi2 - phi1) / deltaPsi : Math.cos(phi1); const deltaLambda = delta * Math.sin(theta) / q; const lambda2 = lambda1 + deltaLambda; const lon2 = (toDegrees(lambda2) + 540) % 360 - 180; return { lat: toDegrees(phi2), lon: lon2 }; }
         function calculateAzimuthElevation(obsLatDeg, obsLonDeg, satLatDeg, satLonDeg, satAltKm) { const a = 6378.137, f = 1 / 298.257223563, e2 = 2 * f - f * f; const obsLatRad = toRadians(obsLatDeg), obsLonRad = toRadians(obsLonDeg); const N_obs = a / Math.sqrt(1 - e2 * Math.sin(obsLatRad) ** 2); const obsX = (N_obs) * Math.cos(obsLatRad) * Math.cos(obsLonRad); const obsY = (N_obs) * Math.cos(obsLatRad) * Math.sin(obsLonRad); const obsZ = ((1 - e2) * N_obs) * Math.sin(obsLatRad); const satLatRad = toRadians(satLatDeg), satLonRad = toRadians(satLonDeg); const N_sat = a / Math.sqrt(1 - e2 * Math.sin(satLatRad) ** 2); const satX = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.cos(satLonRad); const satY = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.sin(satLonRad); const satZ = ((1 - e2) * N_sat + satAltKm) * Math.sin(satLatRad); const dX = satX - obsX, dY = satY - obsY, dZ = satZ - obsZ; const sLat = Math.sin(obsLatRad), cLat = Math.cos(obsLatRad); const sLon = Math.sin(obsLonRad), cLon = Math.cos(obsLonRad); const E = -sLon * dX + cLon * dY; const N = -sLat * cLon * dX - sLat * sLon * dY + cLat * dZ; const U = cLat * cLon * dX + cLat * sLon * dY + sLat * dZ; const elevationRad = Math.atan2(U, Math.sqrt(E * E + N * N)); let azimuthRad = Math.atan2(E, N); let azimuthDeg = toDegrees(azimuthRad); if (azimuthDeg < 0) azimuthDeg += 360; return { azimuth: azimuthDeg, elevation: toDegrees(elevationRad) }; }
     </script>
 
 </body>
 </html>
-
