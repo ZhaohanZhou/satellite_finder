@@ -26,8 +26,20 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     
-    <!-- Geomag JS for Magnetic Declination Calculation -->
-    <script src="https://cdn.jsdelivr.net/npm/geomag/dist/geomag.min.js"></script>
+    <!-- Geomagnetism (WMM2025) for Magnetic Declination Calculation -->
+    <script type="module">
+        import geomagnetism from 'https://cdn.jsdelivr.net/npm/geomagnetism@0.2.0/+esm';
+        window.geomagnetism = geomagnetism;
+    </script>
+    
+    <!-- Satellite.js for SGP4 TLE propagation -->
+    <script src="https://cdn.jsdelivr.net/npm/satellite.js@6.0.2/dist/satellite.min.js"></script>
+    
+    <!-- Chart.js for graphing -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- tz-lookup for lat/lon to IANA timezone -->
+    <script src="https://cdn.jsdelivr.net/npm/tz-lookup@6.1.25/tz.js"></script>
     
     <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -141,6 +153,14 @@
                     <div id="map-container" class="mt-6 rounded-lg overflow-hidden border border-gray-200">
                         <div id="map"></div>
                     </div>
+
+                    <div id="chart-container" class="mt-6 hidden">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-2">Daily LOS Variation (24h)</h3>
+                        <p id="chart-status" class="text-sm text-gray-500 mb-2"></p>
+                        <div class="rounded-lg border border-gray-200 p-3 bg-white">
+                            <canvas id="dailyChart"></canvas>
+                        </div>
+                    </div>
                 </div>
             </div>
         </main>
@@ -152,9 +172,9 @@
                 navigator.serviceWorker.register('./sw.js').then(reg => console.log('SW registered!', reg)).catch(err => console.log('SW registration failed: ', err));
             });
         }
-        const satellites = [{ name: 'APAC', lat: 0.012, lon: 143.505, alt: 35786.433 },{ name: 'AMER', lat: -0.005, lon: -97.994, alt: 35786.451 },{ name: 'EMEA', lat: -0.002, lon: 24.868, alt: 35786.605 }];
-        const getLocationBtn = document.getElementById('getLocationBtn'),locationInput = document.getElementById('locationInput'),searchBtn = document.getElementById('searchBtn'),statusDiv = document.getElementById('status'),loader = document.getElementById('loader'),resultsPlaceholder = document.getElementById('results-placeholder'),resultsContainer = document.getElementById('results-container'),bestSatName = document.getElementById('bestSatName'),elevationSpan = document.getElementById('elevation'),azimuthSpan = document.getElementById('azimuth'),magAzimuthSpan = document.getElementById('magAzimuth'),magAzimuthRow = document.getElementById('magAzimuthRow'),obstacleTableBody = document.getElementById('obstacleTableBody'),metricBtn = document.getElementById('metricBtn'),imperialBtn = document.getElementById('imperialBtn'),distanceHeader = document.getElementById('distanceHeader'),clearanceHeader = document.getElementById('clearanceHeader'),obstacleContainer = document.getElementById('obstacle-container'),mapContainer = document.getElementById('map-container');
-        let currentUnit = 'metric',lastLocation = null,map = null,userMarker = null,satelliteLine = null,satelliteMarkers = L.layerGroup(),distanceMarkers = L.layerGroup();
+        const satellites = [{ name: 'APAC', noradId: 28899, lat: 0.012, lon: 143.505, alt: 35786.433 },{ name: 'AMER', noradId: 33278, lat: -0.005, lon: -97.994, alt: 35786.451 },{ name: 'EMEA', noradId: 39215, lat: -0.002, lon: 24.868, alt: 35786.605 }];
+        const getLocationBtn = document.getElementById('getLocationBtn'),locationInput = document.getElementById('locationInput'),searchBtn = document.getElementById('searchBtn'),statusDiv = document.getElementById('status'),loader = document.getElementById('loader'),resultsPlaceholder = document.getElementById('results-placeholder'),resultsContainer = document.getElementById('results-container'),bestSatName = document.getElementById('bestSatName'),elevationSpan = document.getElementById('elevation'),azimuthSpan = document.getElementById('azimuth'),magAzimuthSpan = document.getElementById('magAzimuth'),magAzimuthRow = document.getElementById('magAzimuthRow'),obstacleTableBody = document.getElementById('obstacleTableBody'),metricBtn = document.getElementById('metricBtn'),imperialBtn = document.getElementById('imperialBtn'),distanceHeader = document.getElementById('distanceHeader'),clearanceHeader = document.getElementById('clearanceHeader'),obstacleContainer = document.getElementById('obstacle-container'),mapContainer = document.getElementById('map-container'),chartContainer = document.getElementById('chart-container'),chartStatus = document.getElementById('chart-status'),dailyChartCanvas = document.getElementById('dailyChart');
+        let currentUnit = 'metric',lastLocation = null,map = null,userMarker = null,satelliteLine = null,satelliteMarkers = L.layerGroup(),distanceMarkers = L.layerGroup(),dailyChart = null,tleCache = {};
         const METERS_TO_FEET = 3.28084;
         getLocationBtn.addEventListener('click', getUserLocation);
         searchBtn.addEventListener('click', handleSearch);
@@ -222,21 +242,84 @@
         async function searchAddress(address) { setLoading(true); showStatus("Searching for address..."); const controller = new AbortController(); const timeoutId = setTimeout(() => controller.abort(), 10000); const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&addressdetails=1`; try { const response = await fetch(url, { signal: controller.signal }); clearTimeout(timeoutId); if (!response.ok) throw new Error(`Network response was not ok`); const data = await response.json(); if (data && data.length > 0) { const { lat, lon, display_name, address } = data[0]; if (address && address.country_code === 'us') { setUnit('feet', false); } else { setUnit('metric', false); } processLocation(parseFloat(lat), parseFloat(lon), `Address: ${display_name}`); } else { showStatus("Address not found. Please try a different one.", true); setLoading(false); } } catch (error) { clearTimeout(timeoutId); if (error.name === 'AbortError') showStatus("Address service timed out.", true); else showStatus("Could not connect to the address service.", true); setLoading(false); } }
         async function processManualCoords(query) { const parts = query.split(',').map(s => s.trim()); const lat = parseFloat(parts[0]); const lon = parseFloat(parts[1]); if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) { showStatus("Invalid coordinates entered. Please use 'latitude, longitude' format.", true); return; } setLoading(true); if (navigator.onLine) { await checkCountryAndSetUnit(lat, lon); } processLocation(lat, lon, `Coordinates: ${lat.toFixed(4)}, ${lon.toFixed(4)}`); }
         async function checkCountryAndSetUnit(lat, lon) { try { const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`; const response = await fetch(url); const data = await response.json(); if (data.address && data.address.country_code === 'us') { setUnit('feet', false); } else { setUnit('metric', false); } } catch (error) { console.error("Reverse geocoding failed, defaulting to metric.", error); setUnit('metric', false); } }
-        function processLocation(lat, lon, statusMessage, isUnitChange = false) { if (!isUnitChange) { setLoading(true); showStatus(statusMessage, false); } lastLocation = { lat, lon, statusMessage }; let bestSat = null; let maxElevation = -90; satellites.forEach(sat => { const result = calculateAzimuthElevation(lat, lon, sat.lat, sat.lon, sat.alt); if (result.elevation > maxElevation) { maxElevation = result.elevation; bestSat = { ...sat, ...result }; } }); if (bestSat) { lastLocation.bestSat = bestSat; updateResults(bestSat); updateMap(lat, lon, bestSat); } else { showStatus("Could not calculate satellite data.", true); } if (!isUnitChange) { setLoading(false); } }
+        function processLocation(lat, lon, statusMessage, isUnitChange = false) {
+            // On unit change, reuse the last computed satellite data
+            if (isUnitChange && lastLocation && lastLocation.bestSat) {
+                const bestSat = lastLocation.bestSat;
+                updateResults(bestSat);
+                updateMap(lat, lon, bestSat);
+                return;
+            }
+
+            setLoading(true);
+            showStatus(statusMessage, false);
+            lastLocation = { lat, lon, statusMessage };
+
+            // Try to use live SGP4 positions (from network or cached TLE), fall back to hardcoded
+            const doProcess = async () => {
+                let bestSat = null;
+                let maxElevation = -90;
+                const now = new Date();
+
+                for (const sat of satellites) {
+                    let satLat = sat.lat, satLon = sat.lon, satAlt = sat.alt;
+                    let usedLive = false;
+
+                    if (typeof satellite !== 'undefined') {
+                        try {
+                            const satrec = await fetchTLE(sat.noradId);
+                            const pos = propagateSatPosition(satrec, now);
+                            if (pos) {
+                                satLat = pos.lat;
+                                satLon = pos.lon;
+                                satAlt = pos.alt;
+                                usedLive = true;
+                            }
+                        } catch (e) {
+                            // Fall back to hardcoded position
+                        }
+                    }
+
+                    const result = calculateAzimuthElevation(lat, lon, satLat, satLon, satAlt);
+                    if (result.elevation > maxElevation) {
+                        maxElevation = result.elevation;
+                        bestSat = { ...sat, ...result, liveLat: satLat, liveLon: satLon, liveAlt: satAlt, usedLive };
+                    }
+                }
+
+                if (bestSat) {
+                    lastLocation.bestSat = bestSat;
+                    updateResults(bestSat);
+                    updateMap(lat, lon, bestSat);
+                    updateDailyChart(lat, lon, bestSat);
+                } else {
+                    showStatus("Could not calculate satellite data.", true);
+                }
+                setLoading(false);
+            };
+
+            doProcess();
+        }
         function updateResults(sat) {
             resultsPlaceholder.classList.add('hidden');
             resultsContainer.classList.remove('hidden');
             bestSatName.textContent = sat.name;
-            elevationSpan.textContent = sat.elevation.toFixed(0);
+            elevationSpan.textContent = sat.elevation.toFixed(1);
             const trueAzimuth = sat.azimuth;
             azimuthSpan.textContent = `${trueAzimuth.toFixed(0)}° ${degreesToCompass(trueAzimuth)}`;
             
-            if (typeof geomag !== 'undefined') {
-                const field = geomag.field(lastLocation.lat, lastLocation.lon);
-                const declination = field.declination;
-                const magneticAzimuth = (trueAzimuth - declination + 360) % 360;
-                magAzimuthSpan.textContent = `${magneticAzimuth.toFixed(0)}° ${degreesToCompass(magneticAzimuth)}`;
-                magAzimuthRow.classList.remove('hidden');
+            if (typeof window.geomagnetism !== 'undefined') {
+                try {
+                    const model = window.geomagnetism.model();
+                    const point = model.point([lastLocation.lat, lastLocation.lon]);
+                    const declination = point.decl;
+                    const magneticAzimuth = (trueAzimuth - declination + 360) % 360;
+                    magAzimuthSpan.textContent = `${magneticAzimuth.toFixed(0)}° ${degreesToCompass(magneticAzimuth)}`;
+                    magAzimuthRow.classList.remove('hidden');
+                } catch (e) {
+                    console.error('Geomagnetism calculation failed:', e);
+                    magAzimuthRow.classList.add('hidden');
+                }
             } else {
                 magAzimuthRow.classList.add('hidden');
             }
@@ -263,7 +346,9 @@
         function updateMap(userLat, userLon, sat) {
             initMap();
             const userPos = [userLat, userLon];
-            const satPos = [sat.lat, sat.lon];
+            const satLat = sat.liveLat !== undefined ? sat.liveLat : sat.lat;
+            const satLon = sat.liveLon !== undefined ? sat.liveLon : sat.lon;
+            const satPos = [satLat, satLon];
             satelliteMarkers.clearLayers();
             distanceMarkers.clearLayers();
             if (userMarker) {
@@ -274,12 +359,12 @@
 
             // --- ANTImERIDIAN BUG FIX ---
             // Handle drawing the line across the 180° meridian
-            const lonDiff = sat.lon - userLon;
-            let satPosWrapped = [sat.lat, sat.lon];
+            const lonDiff = satLon - userLon;
+            let satPosWrapped = [satLat, satLon];
             if (lonDiff > 180) {
-                satPosWrapped = [sat.lat, sat.lon - 360];
+                satPosWrapped = [satLat, satLon - 360];
             } else if (lonDiff < -180) {
-                satPosWrapped = [sat.lat, sat.lon + 360];
+                satPosWrapped = [satLat, satLon + 360];
             }
             if (satelliteLine) {
                 satelliteLine.setLatLngs([userPos, satPosWrapped]);
@@ -292,7 +377,7 @@
             satelliteMarkers.addLayer(satMarker);
 
             const elevationRad = toRadians(sat.elevation);
-            const rhumbBearing = calculateRhumbBearing(userLat, userLon, sat.lat, sat.lon);
+            const rhumbBearing = calculateRhumbBearing(userLat, userLon, satLat, satLon);
             const isImperial = currentUnit === 'feet';
             const distances = isImperial ? [30, 150, 300] : [10, 50, 100];
             const unitLabel = isImperial ? 'ft' : 'm';
@@ -318,6 +403,468 @@
         }
         function calculateRhumbBearing(lat1, lon1, lat2, lon2) { const phi1 = toRadians(lat1), phi2 = toRadians(lat2); let deltaLambda = toRadians(lon2 - lon1); if (Math.abs(deltaLambda) > Math.PI) deltaLambda = deltaLambda > 0 ? -(2 * Math.PI - deltaLambda) : (2 * Math.PI + deltaLambda); const deltaPsi = Math.log(Math.tan(Math.PI / 4 + phi2 / 2) / Math.tan(Math.PI / 4 + phi1 / 2)); const bearing = toDegrees(Math.atan2(deltaLambda, deltaPsi)); return (bearing + 360) % 360; }
         function calculateRhumbDestinationPoint(lat, lon, bearing, distance) { const R = 6371e3; const phi1 = toRadians(lat), lambda1 = toRadians(lon); const theta = toRadians(bearing), delta = distance / R; const phi2 = phi1 + delta * Math.cos(theta); const deltaPsi = Math.log(Math.tan(phi2 / 2 + Math.PI / 4) / Math.tan(phi1 / 2 + Math.PI / 4)); const q = Math.abs(deltaPsi) > 10e-12 ? (phi2 - phi1) / deltaPsi : Math.cos(phi1); const deltaLambda = delta * Math.sin(theta) / q; const lambda2 = lambda1 + deltaLambda; const lon2 = (toDegrees(lambda2) + 540) % 360 - 180; return { lat: toDegrees(phi2), lon: lon2 }; }
+
+        // --- Daily LOS Variation Chart ---
+        const TLE_CACHE_TTL = 24 * 3600 * 1000; // 24 hours in ms
+
+        function loadTLEFromStorage(noradId) {
+            try {
+                const raw = localStorage.getItem('tle_' + noradId);
+                if (!raw) return null;
+                const cached = JSON.parse(raw);
+                if (!cached.line1 || !cached.line2 || !cached.ts) return null;
+                return cached;
+            } catch (e) { return null; }
+        }
+
+        function saveTLEToStorage(noradId, line1, line2) {
+            try {
+                localStorage.setItem('tle_' + noradId, JSON.stringify({ line1, line2, ts: Date.now() }));
+            } catch (e) { /* storage full or unavailable — non-fatal */ }
+        }
+
+        function parseTLELines(line1, line2) {
+            const satrec = satellite.twoline2satrec(line1, line2);
+            if (satrec.error !== 0) throw new Error('TLE parse error: ' + satrec.error);
+            return satrec;
+        }
+
+        async function fetchTLE(noradId) {
+            // 1. In-memory cache (fastest)
+            if (tleCache[noradId]) return tleCache[noradId];
+
+            // 2. localStorage cache — use if fresh enough or if offline
+            const stored = loadTLEFromStorage(noradId);
+            const storedFresh = stored && (Date.now() - stored.ts < TLE_CACHE_TTL);
+
+            if (storedFresh && typeof satellite !== 'undefined') {
+                const satrec = parseTLELines(stored.line1, stored.line2);
+                tleCache[noradId] = satrec;
+                return satrec;
+            }
+
+            // 3. Network fetch (only when online)
+            if (navigator.onLine) {
+                const url = `https://celestrak.org/NORAD/elements/gp.php?CATNR=${noradId}&FORMAT=TLE`;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                try {
+                    const response = await fetch(url, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+                    if (!response.ok) throw new Error('TLE fetch failed');
+                    const text = await response.text();
+                    const lines = text.trim().split('\n');
+                    if (lines.length < 3) throw new Error('Invalid TLE data');
+                    const tleLine1 = lines[1].trim();
+                    const tleLine2 = lines[2].trim();
+                    const satrec = parseTLELines(tleLine1, tleLine2);
+                    saveTLEToStorage(noradId, tleLine1, tleLine2);
+                    tleCache[noradId] = satrec;
+                    return satrec;
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    // Network failed — fall through to stale localStorage
+                }
+            }
+
+            // 4. Stale localStorage fallback (offline or network error)
+            if (stored && typeof satellite !== 'undefined') {
+                const satrec = parseTLELines(stored.line1, stored.line2);
+                tleCache[noradId] = satrec;
+                return satrec;
+            }
+
+            throw new Error('No TLE available for ' + noradId);
+        }
+
+        function propagateSatPosition(satrec, date) {
+            const posVel = satellite.propagate(satrec, date);
+            if (!posVel.position) return null;
+            const gmst = satellite.gstime(date);
+            const gd = satellite.eciToGeodetic(posVel.position, gmst);
+            return {
+                lat: (gd.latitude * 180) / Math.PI,
+                lon: (gd.longitude * 180) / Math.PI,
+                alt: gd.height
+            };
+        }
+
+        function getLocalTimeLabel(date, timezone) {
+            try {
+                return new Intl.DateTimeFormat('en-GB', {
+                    timeZone: timezone,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                }).format(date);
+            } catch (e) {
+                // Fallback if timezone is invalid
+                const offset = Math.round(lastLocation.lon / 15);
+                const local = new Date(date.getTime() + offset * 3600000);
+                return local.getUTCHours().toString().padStart(2, '0') + ':' + local.getUTCMinutes().toString().padStart(2, '0');
+            }
+        }
+
+        function getTimezoneAbbr(date, timezone) {
+            try {
+                const parts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone,
+                    timeZoneName: 'short'
+                }).formatToParts(date);
+                const tzPart = parts.find(p => p.type === 'timeZoneName');
+                return tzPart ? tzPart.value : 'Local';
+            } catch (e) {
+                const offset = Math.round(lastLocation.lon / 15);
+                return 'UTC' + (offset >= 0 ? '+' : '') + offset;
+            }
+        }
+
+        async function updateDailyChart(lat, lon, bestSat) {
+            if (typeof satellite === 'undefined' || typeof Chart === 'undefined') {
+                chartContainer.classList.add('hidden');
+                return;
+            }
+
+            chartContainer.classList.remove('hidden');
+            chartStatus.textContent = 'Fetching orbital data...';
+
+            let satrec;
+            try {
+                satrec = await fetchTLE(bestSat.noradId);
+            } catch (error) {
+                chartStatus.textContent = 'Could not fetch orbital data. Chart unavailable.';
+                chartStatus.className = 'text-sm text-red-500 mb-2';
+                if (dailyChart) { dailyChart.destroy(); dailyChart = null; }
+                return;
+            }
+
+            // Show cache age hint if using stored TLE
+            const stored = loadTLEFromStorage(bestSat.noradId);
+            if (stored && !navigator.onLine) {
+                const ageHrs = ((Date.now() - stored.ts) / 3600000).toFixed(1);
+                chartStatus.textContent = `Using cached orbital data (${ageHrs}h old). Connect to refresh.`;
+                chartStatus.className = 'text-sm text-yellow-600 mb-2';
+            } else {
+                chartStatus.textContent = 'Calculating daily variation...';
+                chartStatus.className = 'text-sm text-gray-500 mb-2';
+            }
+
+            // Determine timezone from location
+            let timezone;
+            try {
+                timezone = tzlookup(lat, lon);
+            } catch (e) {
+                const offset = Math.round(lon / 15);
+                timezone = 'Etc/GMT' + (offset <= 0 ? '+' : '') + (-offset);
+            }
+
+            // Build data for 24 hours (today UTC)
+            const now = new Date();
+            const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+            const utcLabels = [];
+            const localLabels = [];
+            const elevations = [];
+            const azimuths = [];
+            let validPoints = 0;
+
+            for (let h = 0; h <= 24; h++) {
+                const date = new Date(todayUTC.getTime() + h * 3600000);
+                utcLabels.push((h % 24 === 0 && h === 24 ? '24' : h.toString().padStart(2, '0')) + ':00');
+                localLabels.push(getLocalTimeLabel(date, timezone));
+
+                const pos = propagateSatPosition(satrec, date);
+                if (pos) {
+                    const result = calculateAzimuthElevation(lat, lon, pos.lat, pos.lon, pos.alt);
+                    elevations.push(result.elevation);
+                    azimuths.push(result.azimuth);
+                    validPoints++;
+                } else {
+                    elevations.push(null);
+                    azimuths.push(null);
+                }
+            }
+
+            if (validPoints === 0) {
+                chartStatus.textContent = 'Propagation failed for all time points.';
+                chartStatus.className = 'text-sm text-red-500 mb-2';
+                if (dailyChart) { dailyChart.destroy(); dailyChart = null; }
+                return;
+            }
+
+            const tzAbbr = getTimezoneAbbr(todayUTC, timezone);
+            chartStatus.textContent = `Satellite: ${bestSat.name} | TLE propagation via SGP4 | Local: ${tzAbbr}`;
+            chartStatus.className = 'text-sm text-gray-500 mb-2';
+
+            // Compute magnetic directions if geomagnetism is available
+            let magneticDirections = null;
+            if (typeof window.geomagnetism !== 'undefined') {
+                try {
+                    const model = window.geomagnetism.model();
+                    const point = model.point([lat, lon]);
+                    const declination = point.decl;
+                    magneticDirections = azimuths.map(az => az !== null ? (az - declination + 360) % 360 : null);
+                } catch (e) {
+                    console.error('Geomagnetism chart calculation failed:', e);
+                }
+            }
+
+            renderDailyChart(utcLabels, localLabels, elevations, azimuths, magneticDirections, bestSat.name, tzAbbr);
+        }
+
+        function renderDailyChart(utcLabels, localLabels, elevations, azimuths, magneticDirections, satName, tzAbbr) {
+            if (dailyChart) {
+                dailyChart.destroy();
+                dailyChart = null;
+            }
+
+            // Unwrap direction arrays that cross the 0/360 boundary.
+            // If the combined range spans > 180°, values > 180 are shifted down by 360
+            // (e.g., 359° becomes -1°) so the chart draws a smooth line.
+            // Axis ticks and tooltips add 360 back for display.
+            const allRaw = azimuths.concat(magneticDirections || []).filter(v => v !== null);
+            const needsUnwrap = allRaw.length > 0 && (Math.max(...allRaw) - Math.min(...allRaw)) > 180;
+            const unwrap = v => v !== null && v > 180 ? v - 360 : v;
+            const plotAzimuths = needsUnwrap ? azimuths.map(v => v !== null ? unwrap(v) : null) : azimuths;
+            const plotMagnetic = magneticDirections ? (needsUnwrap ? magneticDirections.map(v => v !== null ? unwrap(v) : null) : magneticDirections) : null;
+
+            // Compute nice axis ranges
+            const validEl = elevations.filter(v => v !== null);
+            const validAz = plotAzimuths.filter(v => v !== null);
+            const validMag = plotMagnetic ? plotMagnetic.filter(v => v !== null) : [];
+            const allDirectionValues = validAz.concat(validMag);
+            const elMin = Math.floor(Math.min(...validEl) * 10) / 10;
+            const elMax = Math.ceil(Math.max(...validEl) * 10) / 10;
+            const azMin = Math.floor(Math.min(...allDirectionValues) * 10) / 10;
+            const azMax = Math.ceil(Math.max(...allDirectionValues) * 10) / 10;
+
+            // Add padding for min/max labels
+            const elPad = Math.max((elMax - elMin) * 0.2, 0.1);
+            const azPad = Math.max((azMax - azMin) * 0.2, 0.1);
+
+            const ctx = dailyChartCanvas.getContext('2d');
+            const datasets = [
+                {
+                    label: 'Elevation (\u00B0)',
+                    data: elevations,
+                    borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yElevation',
+                    spanGaps: true
+                },
+                {
+                    label: 'Direction - True North \uD83D\uDDFA\uFE0F (\u00B0)',
+                    data: plotAzimuths,
+                    borderColor: '#dc2626',
+                    backgroundColor: 'rgba(220, 38, 38, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yDirection',
+                    spanGaps: true
+                }
+            ];
+            if (plotMagnetic) {
+                datasets.push({
+                    label: 'Direction - Magnetic North \uD83E\uDDED (\u00B0)',
+                    data: plotMagnetic,
+                    borderColor: '#ea580c',
+                    backgroundColor: 'rgba(234, 88, 12, 0.1)',
+                    borderWidth: 2,
+                    borderDash: [6, 3],
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    tension: 0.3,
+                    yAxisID: 'yDirection',
+                    spanGaps: true
+                });
+            }
+            // Find min/max indices for elevation and direction (true north)
+            function findMinMax(arr) {
+                let minI = -1, maxI = -1, minV = Infinity, maxV = -Infinity;
+                for (let i = 0; i < arr.length; i++) {
+                    if (arr[i] === null) continue;
+                    if (arr[i] < minV) { minV = arr[i]; minI = i; }
+                    if (arr[i] > maxV) { maxV = arr[i]; maxI = i; }
+                }
+                return { minI, maxI, minV, maxV };
+            }
+            const elMM = findMinMax(elevations);
+            const azMM = findMinMax(plotAzimuths);
+
+            // Inline plugin to draw min/max labels on chart with collision avoidance
+            const minMaxPlugin = {
+                id: 'minMaxLabels',
+                afterDatasetsDraw(chart) {
+                    const ctx = chart.ctx;
+                    ctx.save();
+                    ctx.font = 'bold 10px Inter, sans-serif';
+
+                    // Collect all labels with their pixel positions
+                    const labels = [];
+                    function addLabel(datasetIndex, index, text, color, above) {
+                        const meta = chart.getDatasetMeta(datasetIndex);
+                        if (!meta.data[index]) return;
+                        const pt = meta.data[index];
+                        const w = ctx.measureText(text).width;
+                        labels.push({ x: pt.x, y: pt.y + (above ? -10 : 14), text, color, w, h: 12 });
+                    }
+
+                    // Elevation min/max (dataset 0, blue)
+                    if (elMM.maxI >= 0) addLabel(0, elMM.maxI, 'Max ' + elMM.maxV.toFixed(1) + '\u00B0', '#2563eb', true);
+                    if (elMM.minI >= 0) addLabel(0, elMM.minI, 'Min ' + elMM.minV.toFixed(1) + '\u00B0', '#2563eb', false);
+
+                    // Direction min/max (dataset 1, red)
+                    if (azMM.maxI >= 0) {
+                        const dMax = azMM.maxV < 0 ? azMM.maxV + 360 : azMM.maxV;
+                        addLabel(1, azMM.maxI, 'Max ' + dMax.toFixed(1) + '\u00B0', '#dc2626', true);
+                    }
+                    if (azMM.minI >= 0) {
+                        const dMin = azMM.minV < 0 ? azMM.minV + 360 : azMM.minV;
+                        addLabel(1, azMM.minI, 'Min ' + dMin.toFixed(1) + '\u00B0', '#dc2626', false);
+                    }
+
+                    // Resolve overlaps: nudge labels apart vertically
+                    for (let pass = 0; pass < 5; pass++) {
+                        for (let i = 0; i < labels.length; i++) {
+                            for (let j = i + 1; j < labels.length; j++) {
+                                const a = labels[i], b = labels[j];
+                                const overlapX = Math.abs(a.x - b.x) < (a.w + b.w) / 2;
+                                const overlapY = Math.abs(a.y - b.y) < a.h;
+                                if (overlapX && overlapY) {
+                                    const nudge = (a.h - Math.abs(a.y - b.y)) / 2 + 2;
+                                    if (a.y < b.y) { a.y -= nudge; b.y += nudge; }
+                                    else { a.y += nudge; b.y -= nudge; }
+                                }
+                            }
+                        }
+                    }
+
+                    // Draw all labels
+                    ctx.textAlign = 'center';
+                    for (const l of labels) {
+                        ctx.fillStyle = l.color;
+                        ctx.fillText(l.text, l.x, l.y);
+                    }
+
+                    ctx.restore();
+                }
+            };
+
+            dailyChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: utcLabels,
+                    datasets: datasets
+                },
+                plugins: [minMaxPlugin],
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    aspectRatio: 2,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `${satName} LOS Direction & Elevation Over 24 Hours`,
+                            font: { size: 14, weight: '600' },
+                            color: '#1f2937'
+                        },
+                        tooltip: {
+                            callbacks: {
+                                title: function(items) {
+                                    const idx = items[0].dataIndex;
+                                    return `UTC ${utcLabels[idx]} | ${tzAbbr} ${localLabels[idx]}`;
+                                },
+                                label: function(context) {
+                                    const val = context.parsed.y;
+                                    if (val === null) return context.dataset.label + ': N/A';
+                                    const displayVal = val < 0 ? val + 360 : val;
+                                    return context.dataset.label + ': ' + displayVal.toFixed(3) + '\u00B0';
+                                }
+                            }
+                        },
+                        legend: {
+                            labels: {
+                                boxWidth: 20,
+                                boxHeight: 2,
+                                font: { size: 12 }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: `UTC Hour (${tzAbbr} shown in tooltips)`,
+                                font: { size: 12 }
+                            },
+                            ticks: {
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 12,
+                                font: { size: 10 }
+                            },
+                            grid: {
+                                color: 'rgba(0,0,0,0.05)'
+                            }
+                        },
+                        yElevation: {
+                            type: 'linear',
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Elevation (\u00B0)',
+                                color: '#2563eb',
+                                font: { size: 12, weight: '600' }
+                            },
+                            ticks: {
+                                color: '#2563eb',
+                                font: { size: 10 },
+                                callback: function(val) { return val.toFixed(2) + '\u00B0'; }
+                            },
+                            min: elMin - elPad,
+                            max: elMax + elPad,
+                            grid: {
+                                color: 'rgba(37, 99, 235, 0.1)'
+                            }
+                        },
+                        yDirection: {
+                            type: 'linear',
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Direction (\u00B0)',
+                                color: '#dc2626',
+                                font: { size: 12, weight: '600' }
+                            },
+                            ticks: {
+                                color: '#dc2626',
+                                font: { size: 10 },
+                                callback: function(val) { const d = val < 0 ? val + 360 : val; return d.toFixed(2) + '\u00B0'; }
+                            },
+                            min: azMin - azPad,
+                            max: azMax + azPad,
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        // --- End Daily LOS Variation Chart ---
+
         function calculateAzimuthElevation(obsLatDeg, obsLonDeg, satLatDeg, satLonDeg, satAltKm) { const a = 6378.137, f = 1 / 298.257223563, e2 = 2 * f - f * f; const obsLatRad = toRadians(obsLatDeg), obsLonRad = toRadians(obsLonDeg); const N_obs = a / Math.sqrt(1 - e2 * Math.sin(obsLatRad) ** 2); const obsX = (N_obs) * Math.cos(obsLatRad) * Math.cos(obsLonRad); const obsY = (N_obs) * Math.cos(obsLatRad) * Math.sin(obsLonRad); const obsZ = ((1 - e2) * N_obs) * Math.sin(obsLatRad); const satLatRad = toRadians(satLatDeg), satLonRad = toRadians(satLonDeg); const N_sat = a / Math.sqrt(1 - e2 * Math.sin(satLatRad) ** 2); const satX = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.cos(satLonRad); const satY = (N_sat + satAltKm) * Math.cos(satLatRad) * Math.sin(satLonRad); const satZ = ((1 - e2) * N_sat + satAltKm) * Math.sin(satLatRad); const dX = satX - obsX, dY = satY - obsY, dZ = satZ - obsZ; const sLat = Math.sin(obsLatRad), cLat = Math.cos(obsLatRad); const sLon = Math.sin(obsLonRad), cLon = Math.cos(obsLonRad); const E = -sLon * dX + cLon * dY; const N = -sLat * cLon * dX - sLat * sLon * dY + cLat * dZ; const U = cLat * cLon * dX + cLat * sLon * dY + sLat * dZ; const elevationRad = Math.atan2(U, Math.sqrt(E * E + N * N)); let azimuthRad = Math.atan2(E, N); let azimuthDeg = toDegrees(azimuthRad); if (azimuthDeg < 0) azimuthDeg += 360; return { azimuth: azimuthDeg, elevation: toDegrees(elevationRad) }; }
     </script>
 
