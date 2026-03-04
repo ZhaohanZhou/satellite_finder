@@ -58,6 +58,20 @@
         .leaflet-attribution-flag {
             display: none !important;
         }
+        /* Responsive chart container */
+        #chart-container {
+            width: 100%;
+            max-width: 100%;
+        }
+        /* On mobile, increase chart height for better readability */
+        @media (max-width: 768px) {
+            #chart-container {
+                margin-left: -1.5rem;
+                margin-right: -1.5rem;
+                padding-left: 1.5rem;
+                padding-right: 1.5rem;
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
@@ -758,6 +772,10 @@
                 }
             };
 
+            // Determine aspect ratio based on screen width
+            const isMobile = window.innerWidth < 768;
+            const aspectRatio = isMobile ? 1.2 : 2;
+
             dailyChart = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -768,7 +786,7 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: true,
-                    aspectRatio: 2,
+                    aspectRatio: aspectRatio,
                     interaction: {
                         mode: 'index',
                         intersect: false
