@@ -320,7 +320,7 @@
             bestSatName.textContent = sat.name;
             elevationSpan.textContent = sat.elevation.toFixed(1);
             const trueAzimuth = sat.azimuth;
-            azimuthSpan.textContent = `${trueAzimuth.toFixed(0)}° ${degreesToCompass(trueAzimuth)}`;
+            azimuthSpan.textContent = formatAzimuth(trueAzimuth);
             
             if (typeof window.geomagnetism !== 'undefined') {
                 try {
@@ -328,7 +328,7 @@
                     const point = model.point([lastLocation.lat, lastLocation.lon]);
                     const declination = point.decl;
                     const magneticAzimuth = (trueAzimuth - declination + 360) % 360;
-                    magAzimuthSpan.textContent = `${magneticAzimuth.toFixed(0)}° ${degreesToCompass(magneticAzimuth)}`;
+                    magAzimuthSpan.textContent = formatAzimuth(magneticAzimuth);
                     magAzimuthRow.classList.remove('hidden');
                 } catch (e) {
                     console.error('Geomagnetism calculation failed:', e);
@@ -410,6 +410,23 @@
         }
         function toRadians(deg) { return deg * Math.PI / 180; }
         function toDegrees(rad) { return rad * 180 / Math.PI; }
+        function normalizeAzimuthDisplay(value) {
+            const rounded = Math.round(((value % 360) + 360) % 360);
+            return rounded === 360 ? 0 : rounded;
+        }
+
+        function normalizeAzimuthDisplayFloat(value, decimals) {
+            const wrapped = ((value % 360) + 360) % 360;
+            const factor = Math.pow(10, decimals);
+            const rounded = Math.round(wrapped * factor) / factor;
+            return rounded >= 360 ? 0 : rounded;
+        }
+
+        function formatAzimuth(value) {
+            const normalized = normalizeAzimuthDisplay(value);
+            return `${normalized}° ${degreesToCompass(normalized)}`;
+        }
+
         function degreesToCompass(num) {
             const val = Math.floor((num / 22.5) + 0.5);
             const arr = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
@@ -737,11 +754,11 @@
 
                     // Direction min/max (dataset 1, red)
                     if (azMM.maxI >= 0) {
-                        const dMax = azMM.maxV < 0 ? azMM.maxV + 360 : azMM.maxV;
+                        const dMax = normalizeAzimuthDisplayFloat(azMM.maxV, 1);
                         addLabel(1, azMM.maxI, 'Max ' + dMax.toFixed(1) + '\u00B0', '#dc2626', true);
                     }
                     if (azMM.minI >= 0) {
-                        const dMin = azMM.minV < 0 ? azMM.minV + 360 : azMM.minV;
+                        const dMin = normalizeAzimuthDisplayFloat(azMM.minV, 1);
                         addLabel(1, azMM.minI, 'Min ' + dMin.toFixed(1) + '\u00B0', '#dc2626', false);
                     }
 
@@ -807,7 +824,7 @@
                                 label: function(context) {
                                     const val = context.parsed.y;
                                     if (val === null) return context.dataset.label + ': N/A';
-                                    const displayVal = val < 0 ? val + 360 : val;
+                                    const displayVal = normalizeAzimuthDisplayFloat(val, 3);
                                     return context.dataset.label + ': ' + displayVal.toFixed(3) + '\u00B0';
                                 }
                             }
@@ -869,7 +886,7 @@
                             ticks: {
                                 color: '#dc2626',
                                 font: { size: 10 },
-                                callback: function(val) { const d = val < 0 ? val + 360 : val; return d.toFixed(2) + '\u00B0'; }
+                                callback: function(val) { const d = normalizeAzimuthDisplayFloat(val, 2); return d.toFixed(2) + '\u00B0'; }
                             },
                             min: azMin - azPad,
                             max: azMax + azPad,
