@@ -698,7 +698,8 @@
                     fill: false,
                     tension: 0.3,
                     yAxisID: 'yDirection',
-                    spanGaps: true
+                    spanGaps: true,
+                    hidden: true
                 }
             ];
             if (plotMagnetic) {
@@ -714,7 +715,8 @@
                     fill: false,
                     tension: 0.3,
                     yAxisID: 'yDirection',
-                    spanGaps: true
+                    spanGaps: true,
+                    hidden: true
                 });
             }
             // Find min/max indices for elevation and direction (true north)
@@ -749,17 +751,21 @@
                     }
 
                     // Elevation min/max (dataset 0, blue)
-                    if (elMM.maxI >= 0) addLabel(0, elMM.maxI, 'Max ' + elMM.maxV.toFixed(1) + '\u00B0', '#2563eb', true);
-                    if (elMM.minI >= 0) addLabel(0, elMM.minI, 'Min ' + elMM.minV.toFixed(1) + '\u00B0', '#2563eb', false);
+                    if (chart.isDatasetVisible(0)) {
+                        if (elMM.maxI >= 0) addLabel(0, elMM.maxI, 'Max ' + elMM.maxV.toFixed(1) + '\u00B0', '#2563eb', true);
+                        if (elMM.minI >= 0) addLabel(0, elMM.minI, 'Min ' + elMM.minV.toFixed(1) + '\u00B0', '#2563eb', false);
+                    }
 
                     // Direction min/max (dataset 1, red)
-                    if (azMM.maxI >= 0) {
-                        const dMax = normalizeAzimuthDisplayFloat(azMM.maxV, 1);
-                        addLabel(1, azMM.maxI, 'Max ' + dMax.toFixed(1) + '\u00B0', '#dc2626', true);
-                    }
-                    if (azMM.minI >= 0) {
-                        const dMin = normalizeAzimuthDisplayFloat(azMM.minV, 1);
-                        addLabel(1, azMM.minI, 'Min ' + dMin.toFixed(1) + '\u00B0', '#dc2626', false);
+                    if (chart.isDatasetVisible(1)) {
+                        if (azMM.maxI >= 0) {
+                            const dMax = normalizeAzimuthDisplayFloat(azMM.maxV, 1);
+                            addLabel(1, azMM.maxI, 'Max ' + dMax.toFixed(1) + '\u00B0', '#dc2626', true);
+                        }
+                        if (azMM.minI >= 0) {
+                            const dMin = normalizeAzimuthDisplayFloat(azMM.minV, 1);
+                            addLabel(1, azMM.minI, 'Min ' + dMin.toFixed(1) + '\u00B0', '#dc2626', false);
+                        }
                     }
 
                     // Resolve overlaps: nudge labels apart vertically
