@@ -1,4 +1,4 @@
-const CACHE_NAME = 'satellite-skyview-cache-v3';
+const CACHE_NAME = 'satellite-skyview-cache-v6';
 const urlsToCache = [
     './',
     './index.html',

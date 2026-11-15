@@ -187,6 +187,27 @@
             });
         }
         const satellites = [{ name: 'APAC', noradId: 28899, lat: 0.012, lon: 143.505, alt: 35786.433 },{ name: 'AMER', noradId: 33278, lat: -0.005, lon: -97.994, alt: 35786.451 },{ name: 'EMEA', noradId: 39215, lat: -0.002, lon: 24.868, alt: 35786.605 }];
+        // Coverage overlap between the APAC and AMER satellites ([lat, lon] ring). AMER serves this area,
+        // so inside it AMER is chosen even when APAC is higher in the sky.
+        const OVERLAP_REGION = {
+            preferred: 'AMER',
+            label: 'APAC/AMER overlap',
+            boundary: [[-72,-158.25],[-66,-165.75],[-60,-170],[-54,-172.75],[-48,-174.75],[-42,-176],[-36,-177],[-30,-177.75],
+                [-24,-178.25],[-18,-178.5],[-12,-178.75],[-6,-179],[0,-179],[6,-179],[12,-178.75],[18,-178.5],[24,-178.25],
+                [30,-177.75],[36,-177],[42,-176],[48,-174.75],[54,-172.75],[60,-170],[66,-165.75],[72,-158.25],
+                [72,-156.25],[66,-148.75],[60,-144.5],[54,-141.75],[48,-139.75],[42,-138.5],[36,-137.5],[30,-136.75],
+                [24,-136.25],[18,-136],[12,-135.75],[6,-135.5],[0,-135.5],[-6,-135.5],[-12,-135.75],[-18,-136],
+                [-24,-136.25],[-30,-136.75],[-36,-137.5],[-42,-138.5],[-48,-139.75],[-54,-141.75],[-60,-144.5],
+                [-66,-148.75],[-72,-156.25]]
+        };
+        function isInPolygon(lat, lon, ring) {
+            let inside = false;
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                const [yi, xi] = ring[i], [yj, xj] = ring[j];
+                if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+            }
+            return inside;
+        }
         const getLocationBtn = document.getElementById('getLocationBtn'),locationInput = document.getElementById('locationInput'),searchBtn = document.getElementById('searchBtn'),statusDiv = document.getElementById('status'),loader = document.getElementById('loader'),resultsPlaceholder = document.getElementById('results-placeholder'),resultsContainer = document.getElementById('results-container'),bestSatName = document.getElementById('bestSatName'),elevationSpan = document.getElementById('elevation'),azimuthSpan = document.getElementById('azimuth'),magAzimuthSpan = document.getElementById('magAzimuth'),magAzimuthRow = document.getElementById('magAzimuthRow'),obstacleTableBody = document.getElementById('obstacleTableBody'),metricBtn = document.getElementById('metricBtn'),imperialBtn = document.getElementById('imperialBtn'),distanceHeader = document.getElementById('distanceHeader'),clearanceHeader = document.getElementById('clearanceHeader'),obstacleContainer = document.getElementById('obstacle-container'),mapContainer = document.getElementById('map-container'),chartContainer = document.getElementById('chart-container'),chartStatus = document.getElementById('chart-status'),dailyChartCanvas = document.getElementById('dailyChart');
         let currentUnit = 'metric',lastLocation = null,map = null,userMarker = null,satelliteLine = null,satelliteMarkers = L.layerGroup(),distanceMarkers = L.layerGroup(),dailyChart = null,tleCache = {};
         const METERS_TO_FEET = 3.28084;
@@ -221,7 +242,10 @@
             const baseMaps = { "Street": streetLayer, "Satellite": satelliteLayer };
             map = L.map('map', { layers: [streetLayer], attributionControl: false }).setView([20, 0], 2);
             L.control.attribution({ prefix: '<a href="https://leafletjs.com" title="A JS library for interactive maps">Leaflet</a>' }).addTo(map);
-            L.control.layers(baseMaps).addTo(map);
+            const overlapLayer = L.polygon(OVERLAP_REGION.boundary, { color: '#f97316', weight: 2, dashArray: '6 6', fillOpacity: 0.05 })
+                .bindTooltip(`${OVERLAP_REGION.label} — ${OVERLAP_REGION.preferred} used here`, { sticky: true });
+            overlapLayer.addTo(map);
+            L.control.layers(baseMaps, { "Satellite overlap": overlapLayer }).addTo(map);
             satelliteMarkers.addTo(map);
             distanceMarkers.addTo(map);
         }
@@ -274,6 +298,7 @@
                 let bestSat = null;
                 let maxElevation = -90;
                 const now = new Date();
+                const results = [];
 
                 for (const sat of satellites) {
                     let satLat = sat.lat, satLon = sat.lon, satAlt = sat.alt;
@@ -295,9 +320,19 @@
                     }
 
                     const result = calculateAzimuthElevation(lat, lon, satLat, satLon, satAlt);
+                    const candidate = { ...sat, ...result, liveLat: satLat, liveLon: satLon, liveAlt: satAlt, usedLive };
+                    results.push(candidate);
                     if (result.elevation > maxElevation) {
                         maxElevation = result.elevation;
-                        bestSat = { ...sat, ...result, liveLat: satLat, liveLon: satLon, liveAlt: satAlt, usedLive };
+                        bestSat = candidate;
+                    }
+                }
+
+                // Inside the APAC/AMER overlap, AMER serves the area regardless of which is higher.
+                if (isInPolygon(lat, lon, OVERLAP_REGION.boundary)) {
+                    const preferred = results.find(r => r.name === OVERLAP_REGION.preferred);
+                    if (preferred && preferred.elevation > 0) {
+                        bestSat = preferred;
                     }
                 }
 
@@ -460,6 +495,37 @@
             return satrec;
         }
 
+        // Latest TLEs for all satellites in one request: { [noradId]: { line1, line2 } }.
+        // The promise is shared so concurrent callers don't fire duplicate requests; reset on failure.
+        const TLE_API_URL = 'https://api.myriota.com/beta/tle/latest';
+        let latestTLEPromise = null;
+
+        function fetchLatestTLEs() {
+            if (latestTLEPromise) return latestTLEPromise;
+            latestTLEPromise = (async () => {
+                const ids = satellites.map(s => s.noradId).join(' ');
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+                try {
+                    const response = await fetch(`${TLE_API_URL}?norad_ids=${encodeURIComponent(ids)}`, { signal: controller.signal });
+                    if (!response.ok) throw new Error('TLE fetch failed: HTTP ' + response.status);
+                    const data = await response.json();
+                    const byId = {};
+                    for (const item of data.Items || []) {
+                        const line1 = (item.TLE_LINE1 || '').trim();
+                        const line2 = (item.TLE_LINE2 || '').trim();
+                        const id = parseInt(line1.substring(2, 7), 10);
+                        if (line1.startsWith('1 ') && line2.startsWith('2 ') && id) byId[id] = { line1, line2 };
+                    }
+                    return byId;
+                } finally {
+                    clearTimeout(timeoutId);
+                }
+            })();
+            latestTLEPromise.catch(() => { latestTLEPromise = null; });
+            return latestTLEPromise;
+        }
+
         async function fetchTLE(noradId) {
             // 1. In-memory cache (fastest)
             if (tleCache[noradId]) return tleCache[noradId];
@@ -474,26 +540,17 @@
                 return satrec;
             }
 
-            // 3. Network fetch (only when online)
+            // 3. Network fetch (only when online) — one Myriota TLE API request covers all satellites
             if (navigator.onLine) {
-                const url = `https://celestrak.org/NORAD/elements/gp.php?CATNR=${noradId}&FORMAT=TLE`;
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 10000);
                 try {
-                    const response = await fetch(url, { signal: controller.signal });
-                    clearTimeout(timeoutId);
-                    if (!response.ok) throw new Error('TLE fetch failed');
-                    const text = await response.text();
-                    const lines = text.trim().split('\n');
-                    if (lines.length < 3) throw new Error('Invalid TLE data');
-                    const tleLine1 = lines[1].trim();
-                    const tleLine2 = lines[2].trim();
-                    const satrec = parseTLELines(tleLine1, tleLine2);
-                    saveTLEToStorage(noradId, tleLine1, tleLine2);
+                    const latest = await fetchLatestTLEs();
+                    const tle = latest[noradId];
+                    if (!tle) throw new Error('TLE missing for ' + noradId);
+                    const satrec = parseTLELines(tle.line1, tle.line2);
+                    saveTLEToStorage(noradId, tle.line1, tle.line2);
                     tleCache[noradId] = satrec;
                     return satrec;
                 } catch (error) {
-                    clearTimeout(timeoutId);
                     // Network failed — fall through to stale localStorage
                 }
             }
